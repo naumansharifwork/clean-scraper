@@ -49,14 +49,59 @@ class Site:
             time.sleep(throttle)
             local_detail_pages.append(self._download_page(page))
         # Loop all of the process the detail pages and write out the metadata JSON
+        payload = []
         for local_page in local_detail_pages:
-            self._process_detail_page(local_page)
-	#json_file = Path(
-	return
+            data = self._process_detail_page(local_page)
+            payload.extend(data)
+        # Write out the metadata JSON
 
+    # return path to metadata JSON file
 
     # Helper/Private Methods
     def _process_detail_page(local_page):
+        """Extract links to files such as videos from a detail page and write to JSON file."""
+        # From Serdar: use self.cache.read(local_page) to read the HTML from the cached version of the detail page
+        metadata = []
+
+        # Process child page HTML files in index page folders,
+        # building a list of file metadata (name, url, etc.) along the way
+
+        # Irene: need to include pdf + youtube links + the audio files
+
+        for item in Path(self.cache_dir, self.agency_slug).iterdir():
+            if item.is_dir() and item.name.startswith("s45643"):
+                for html_file in item.iterdir():
+                    if html_file.suffix == ".html":
+                        html = self.cache.read(html_file)
+                        soup = BeautifulSoup(html, "html.parser")
+
+                title_tag = soup.find("h1", class_="elementor")
+                title = title_tag.text.strip() if title_tag else "No title found"
+
+                # Find all <a> tags
+                links = soup.find_all("a")
+
+                # Filter for PDF and YouTube links
+                for link in links:
+                    href = link.get("href", "")
+                    if (
+                        href.endswith(".pdf")
+                        or "youtu.be" in href
+                        or "youtube.com" in href
+                    ):
+                        payload = {
+                            "title": title,
+                            "parent_page": str(html_file),
+                            "asset_url": href.replace("\n", ""),
+                            "name": link.text.strip().replace("\n", ""),
+                        }
+                        metadata.append(payload)
+
+        # Store the metadata in a JSON file in the data directory
+        outfile = self.data_dir.joinpath(f"{self.agency_slug}.json")
+        self.cache.write_json(outfile, metadata)
+        # Return path to metadata file for downstream use
+        return outfile
         pass
 
     def _get_detail_page_links(self, target_url):
