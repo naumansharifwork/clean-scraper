@@ -1,10 +1,12 @@
 import time
 from pathlib import Path
+from typing import List
 
 from bs4 import BeautifulSoup
 
 from .. import utils
 from ..cache import Cache
+from ..utils import MetadataDict
 
 
 class Site:
@@ -28,7 +30,7 @@ class Site:
         ]
         self.data_dir = data_dir
         self.cache_dir = cache_dir
-        self.cache = Cache(cache_dir)
+        self.cache = Cache(cache_dir)  # ~/.clean-scraper/cache/
         # Use module path to construct agency slug, which we'll use downstream
         mod = Path(__file__)
         state_postal = mod.parent.stem
@@ -53,57 +55,89 @@ class Site:
         for local_page in local_detail_pages:
             data = self._process_detail_page(local_page)
             payload.extend(data)
-        # Write out the metadata JSON
-
-    # return path to metadata JSON file
-
-    # Helper/Private Methods
-    def _process_detail_page(local_page):
-        """Extract links to files such as videos from a detail page and write to JSON file."""
-        # From Serdar: use self.cache.read(local_page) to read the HTML from the cached version of the detail page
-        metadata = []
-
-        # Process child page HTML files in index page folders,
-        # building a list of file metadata (name, url, etc.) along the way
-
-        # Irene: need to include pdf + youtube links + the audio files
-
-        for item in Path(self.cache_dir, self.agency_slug).iterdir():
-            if item.is_dir() and item.name.startswith("s45643"):
-                for html_file in item.iterdir():
-                    if html_file.suffix == ".html":
-                        html = self.cache.read(html_file)
-                        soup = BeautifulSoup(html, "html.parser")
-
-                title_tag = soup.find("h1", class_="elementor")
-                title = title_tag.text.strip() if title_tag else "No title found"
-
-                # Find all <a> tags
-                links = soup.find_all("a")
-
-                # Filter for PDF and YouTube links
-                for link in links:
-                    href = link.get("href", "")
-                    if (
-                        href.endswith(".pdf")
-                        or "youtu.be" in href
-                        or "youtube.com" in href
-                    ):
-                        payload = {
-                            "title": title,
-                            "parent_page": str(html_file),
-                            "asset_url": href.replace("\n", ""),
-                            "name": link.text.strip().replace("\n", ""),
-                        }
-                        metadata.append(payload)
-
+        # TODO: Write out the metadata JSON
         # Store the metadata in a JSON file in the data directory
         outfile = self.data_dir.joinpath(f"{self.agency_slug}.json")
         self.cache.write_json(outfile, metadata)
         # Return path to metadata file for downstream use
         return outfile
+
+    def _process_detail_page(self, local_page) -> List[MetadataDict]:
+        """Extract links to files such as videos from a detail page and write to JSON file."""
+        metadata = []
+        # Process child page HTML files in index page folders,
+        # building a list of file metadata (name, url, etc.) along the way
+        html = self.cache.read(local_page)
+        soup = BeautifulSoup(html, "html.parser")
+        # Find the title of the page
+        title = soup.find("h1").text.strip()
+
+        # Find all the videos, photos, etc. on the page *and* construct the *relative* path for the
+        # files, e.g. "ca_ventura_county_sheriff/2019-ois-201906219/photo1.jpg" -> QUESTION FOR SERDAR:
+        # should that be part of this function or should it be done in the _process_pdf/_process_youtube etc
+        # functions?
+
+        links = soup.find_all("a")
+        #  Filter for PDF and YouTube links
+        #  TODO: call separate functions for different link types with an if/elif/else block
+        for link in links:
+            href = link.get("href", "")
+            if href.endswith(".pdf") in href:
+                payload = self._process_pdf(link, title, local_page)
+            elif "youtu.be" in href or "youtube.com" in href:
+                payload = self._process_youtube(link, title, local_page)
+            elif ".mp3" in href:
+                payload = self._process_audio(link, title, local_page)
+
+            metadata.append(payload)
+
+        return metadata
+
+    # Functions to work with each type of file: pdf, youtube and audio:
+
+    def _process_youtube(self, link) -> MetadataDict:
+        """Example:
+        {
+            "title": title,
+            "parent_page": str(html_file),
+            "asset_url": href.replace("\n", ""),
+            "name": link.text.strip().replace("\n", ""),
+        }
+        Returns MetadataDict to be pushed to metadata List
+        """
+        metadata_list = []
+        # QUESTION FOR SERDAR: Is this the right approach?
+        for link in links:
+            href = link.get("href", "")
+            if href.endswith("youtu.be") or "youtube.com" in href:
+                payload = {
+                    "title": title,
+                    "parent_page": str(html_file),
+                    "asset_url": href.replace("\n", ""),
+                    "name": link.text.strip().replace("\n", ""),
+                }
+                metadata_list.append(payload)
         pass
 
+    def _process_pdf(self, link) -> MetadataDict:
+        metadata_list = []
+        for link in links:
+            href = link.get("href", "")
+            if href.endswith(".pdf"):
+                payload = {
+                    "title": title,
+                    "parent_page": str(html_file),
+                    "asset_url": href.replace("\n", ""),
+                    "name": link.text.strip().replace("\n", ""),
+                }
+                metadata_list.append(payload)
+        pass
+
+    # TODO: The audio files are hard coded, need to figure out how to get the audio links:
+    def _process_audio(self, link) -> MetadataDict:
+        pass
+
+    # Helper/Private Methods
     def _get_detail_page_links(self, target_url):
         # Download the index page, which saves to local cache
         full_local_path = self._download_page(target_url)
@@ -115,17 +149,18 @@ class Site:
         # Proceed with normal HTML parsing...
         soup = BeautifulSoup(html, "html.parser")
         links = []
-        container = soup.find("div", attrs={"data-id": "9a80528"})
-        for link in container.find_all("a"):
-            try:
-                url = link.attrs["href"]
-            except AttributeError:
-                url = link
-            if not url.startswith("https://"):
-                import urllib.parse
+        container = soup.select_one("div[data-id='9a80528']")
+        if container:
+            for link in container.find_all("a"):
+                try:
+                    url = link.attrs["href"]
+                except AttributeError:
+                    url = link
+                if not url.startswith("https://"):
+                    import urllib.parse
 
-                url = urllib.parse.urljoin(self.base_url, url)
-            links.append(url)
+                    url = urllib.parse.urljoin(self.base_url, url)
+                links.append(url)
         return links
 
     def _download_page(self, url: str) -> Path:
