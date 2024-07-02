@@ -55,6 +55,7 @@ class Site:
         for local_page in local_detail_pages:
             data = self._process_detail_page(local_page)
             payload.extend(data)
+
         # TODO: Write out the metadata JSON
         # Store the metadata in a JSON file in the data directory
         outfile = self.data_dir.joinpath(f"{self.agency_slug}.json")
